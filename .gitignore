@@ -1,0 +1,4 @@
+.env
+.venvRAG
+__pycache__
+streamlit_standalone.py

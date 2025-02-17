@@ -1,0 +1,1096 @@
+'''
+from langchain import PromptTemplate
+from langchain_core.runnables import RunnableMap, RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain_chroma import Chroma
+from app.core import chunk_documents, load_existing_files
+from config import api_key
+
+from langchain.embeddings import  HuggingFaceHubEmbeddings
+from langchain.llms import HuggingFacePipeline
+from sentence_transformers import SentenceTransformer
+from transformers import pipeline
+
+def create_vector_store(source_dir="./Data/source", persist_dir="./data/vector_store"):
+    """
+    Creates or loads a Chroma vector store and populates it with documents from the source directory.
+    Requires an embedding function to compute embeddings.
+    """
+    if not api_key:
+        raise ValueError(" API key is required to initialize embeddings.")
+
+     # Initialize Hugging Face Embeddings
+    embeddings = HuggingFaceHubEmbeddings(
+        repo_id="sentence-transformers/all-mpnet-base-v2",  # Choose a model
+        huggingfacehub_api_token=api_key
+    )
+
+    # Initialize Chroma Vector Store with Embedding Model
+    vector_store = Chroma(persist_directory=persist_dir, embedding_function=embeddings)
+
+    # Load existing files
+    documents = load_existing_files(source_dir)
+    print(f"Loaded {len(documents)} documents from {source_dir}")
+
+    # Generate chunks
+    chunks = chunk_documents(documents)
+    print(f"Generated {len(chunks)} chunks for the vector store")
+
+    # Add chunks only if they are non-empty
+    if not chunks:
+        print("No valid chunks found. Skipping vector store update.")
+        return vector_store
+
+    vector_store.add_documents(chunks)
+    print("Vector store updated successfully.")
+    return vector_store
+
+
+
+def create_rag_chain(vector_store, llm_model="tiiuae/falcon-7b-instruct"):
+    """
+    Creates a RAG chain for querying the vector store.
+    """
+    prompt_template = """
+    Answer the question based on the context below. If the context is not relevant, just reply "Hmmm! I don't know".
+
+    context: {context}
+
+    question: {question}
+    """
+    prompt = PromptTemplate(template=prompt_template)
+
+    retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+
+    def format_docs(docs):
+        return "\n\n".join(doc.page_content for doc in docs)
+
+    # Initialize Hugging Face Pipeline with custom parameters
+    hf_pipeline = pipeline(
+        "text-generation",
+        model=llm_model,
+        token=api_key,
+        device=0,             # Use GPU if available
+        max_new_tokens=1000,  # Control max tokens
+        temperature=0.5,      # Adjust randomness
+        top_p=0.95,           # Nucleus sampling
+    )
+    llm = HuggingFacePipeline(pipeline=hf_pipeline)
+    parser = StrOutputParser()
+
+    rag_chain = RunnableMap(
+        {
+            "context": retriever | format_docs,
+            "question": RunnablePassthrough(),
+        }
+    ) | prompt | llm | parser
+
+    return rag_chain
+'''
+
+
+Vector store chain.py
+
+# class VectorStoreManager:
+    # """Manages vector store creation and updates."""
+
+    # def __init__(self, source_dir: str, persist_dir: str, api_key: str):
+    #     self.source_dir = source_dir
+    #     self.persist_dir = persist_dir
+    #     self.api_key = api_key
+    #     self.vector_store = None
+
+    # def create_vector_store(self) -> Chroma:
+    #     """
+    #     Creates and populates a Chroma vector store.
+    #     :return: A Chroma vector store.
+    #     """
+    #     if not self.api_key:
+    #         raise ValueError("Google API key is required to initialize embeddings.")
+        
+    #     # Initialize embeddings
+    #     embeddings = GoogleGenerativeAIEmbeddings(
+    #         google_api_key=self.api_key,
+    #         model="models/embedding-001",
+    #         temperature=0,
+    #     )
+
+    #     # Initialize vector store
+    #     self.vector_store = Chroma(persist_directory=self.persist_dir, embedding_function=embeddings)
+
+    #     # Load and chunk to vector store documents
+    #     from app.core import load_existing_files, chunk_documents
+    #     documents = load_existing_files(self.source_dir)
+    #     chunks = chunk_documents(documents)
+
+    #     if chunks:
+    #         self.vector_store.add_documents(chunks)
+    #         logger.info(f"Vector store updated with {len(chunks)} document chunks.")
+    #     else:
+    #         logger.warning("No valid document chunks found. Vector store not updated.")
+
+    #     return self.vector_store
+
+
+    
+# class RAGChainProcessor:
+    # """Handles RAG (Retrieve and Generate) pipeline."""
+
+    # def __init__(self, vector_store: Chroma, api_key: str, llm_model: str = "gemini-1.5-flash"):
+    #     self.vector_store = vector_store
+    #     self.api_key = api_key
+    #     self.llm_model = llm_model
+
+    #     # Initialize LLM
+    #     self.llm = ChatGoogleGenerativeAI(
+    #         google_api_key=self.api_key,
+    #         model=self.llm_model,
+    #         temperature=0.5,
+    #         max_tokens=1000,
+    #         max_retries=2,
+    #     )
+
+    #     # Initialize prompt template
+    #     self.prompt = PromptTemplate(template="""
+    #     Answer the question based on the provided context. 
+    #     If the context doesn't contain enough information, say so.
+
+    #     Context: {context}
+    #     Question: {question}
+    #     Answer:
+    #     """)
+
+    # def process_query(self, query: str) -> str:
+    #     """
+    #     Processes a query through the RAG pipeline.
+    #     :param query: The user query to process.
+    #     :return: The generated response.
+    #     """
+    #     # Retrieve relevant documents
+    #     retriever = self.vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 5})
+    #     retrieved_docs = retriever.get_relevant_documents(query)
+
+    #     # Format context from retrieved documents
+    #     context = "\n\n".join(f"Document {i + 1}:\n{doc.page_content}" for i, doc in enumerate(retrieved_docs))
+
+    #     # Generate response
+    #     response = self.llm.predict(self.prompt.format(context=context, question=query))
+    #     return response
+
+    -----------------Streamlit.py---------------
+    
+# import streamlit as st
+# from app.interface import upload_files, manage_files, query_section
+# #from app.chain import create_vector_store, create_rag_chain
+# from app.chain import VectorStoreManager, RAGChainProcessor
+
+# from config import api_key
+# import time
+
+# # Page configuration
+# st.set_page_config(
+#     page_title="RAG Knowledge Assistant",
+#     page_icon="🤖",
+#     layout="wide",
+#     initial_sidebar_state="expanded"
+# )
+
+# # Custom CSS
+# st.markdown("""
+#     <style>
+#     .main {
+#         padding: 2rem;
+#     }
+#     .stButton > button {
+#         width: 100%;
+#         border-radius: 5px;
+#         height: 3em;
+#         background-color: #FF4B4B;
+#         color: white;
+#     }
+#     .stTextInput > div > div > input {
+#         border-radius: 5px;
+#     }
+#     .success-message {
+#         padding: 1rem;
+#         border-radius: 5px;
+#         background-color: #d4edda;
+#         color: #155724;
+#         margin-bottom: 1rem;
+#     }
+#     .error-message {
+#         padding: 1rem;
+#         border-radius: 5px;
+#         background-color: #f8d7da;
+#         color: #721c24;
+#         margin-bottom: 1rem;
+#     }
+#     .sidebar .sidebar-content {
+#         background-color: #f8f9fa;
+#     }
+#     .status-indicator {
+#         height: 10px;
+#         width: 10px;
+#         border-radius: 50%;
+#         display: inline-block;
+#         margin-right: 5px;
+#     }
+#     .status-active {
+#         background-color: #28a745;
+#     }
+#     .status-inactive {
+#         background-color: #dc3545;
+#     }
+#     </style>
+#     """, unsafe_allow_html=True)
+
+# # Initialize session state
+# if "vector_store" not in st.session_state:
+#     st.session_state["vector_store"] = create_vector_store(api_key)
+#     st.session_state["chat_history"] = []
+#     st.session_state["system_status"] = "active"
+
+# vector_store = st.session_state["vector_store"]
+# rag_chain = create_rag_chain(vector_store, api_key)
+
+# # Sidebar
+# with st.sidebar:
+#     st.image("./Data/img/img-masthead-Security-Audit.png", width=200)  # Add your logo
+#     st.markdown("---")
+    
+#     # System Status
+#     status_color = "status-active" if st.session_state["system_status"] == "active" else "status-inactive"
+#     st.markdown(f"""
+#         <div>
+#             <span class='status-indicator {status_color}'></span>
+#             <span>System Status: {st.session_state["system_status"].title()}</span>
+#         </div>
+#     """, unsafe_allow_html=True)
+    
+#     st.markdown("---")
+    
+#     # Session Management
+#     st.subheader("Session Management")
+#     session_name = st.text_input(
+#         "Session Name",
+#         value="default",
+#         help="Enter a unique name for your upload session"
+#     )
+    
+#     # Clear Session
+#     if st.button("Clear Session"):
+#         st.session_state["chat_history"] = []
+#         st.success("Session cleared successfully!")
+
+# # Main Content
+# st.title("🤖 RAG Knowledge Assistant")
+
+# # Tabs for different sections
+# tab1, tab2, tab3 = st.tabs(["Upload Files", "Manage Documents", "Chat Interface"])
+
+# with tab1:
+#     st.header("Document Upload")
+#     col1, col2 = st.columns([2, 1])
+    
+#     with col1:
+#         try:
+#             upload_files(session_name)
+#         except Exception as e:
+#             st.error(f"Error during upload: {str(e)}")
+    
+#     with col2:
+#         st.info("""
+#         📁 Supported file formats:
+#         - PDF (.pdf)
+#         - Word (.docx)
+#         - Text (.txt)
+#         """)
+
+# with tab2:
+#     st.header("Document Management")
+#     try:
+#         manage_files(vector_store)
+#     except Exception as e:
+#         st.error(f"Error managing files: {str(e)}")
+
+# with tab3:
+#     st.header("Knowledge Assistant")
+    
+#     # Chat Interface
+#     for message in st.session_state.get("chat_history", []):
+#         role = message["role"]
+#         content = message["content"]
+        
+#         if role == "user":
+#             st.markdown(f"**You:** {content}")
+#         else:
+#             st.markdown(f"**Assistant:** {content}")
+    
+#     # Query Input
+#     query = st.text_input("Ask a question about your documents:", key="query_input")
+    
+#     if st.button("Send", key="send_button"):
+#         if query:
+#             # Add user message to chat history
+#             st.session_state.chat_history.append({"role": "user", "content": query})
+            
+#             # Show typing indicator
+#             with st.spinner("Thinking..."):
+#                 try:
+#                     response = query_section(rag_chain, query)
+#                     time.sleep(0.5)  # Small delay for better UX
+                    
+#                     # Add assistant response to chat history
+#                     st.session_state.chat_history.append(
+#                         {"role": "assistant", "content": response}
+#                     )
+                    
+#                     # Force rerun to update chat history
+#                     st.experimental_rerun()
+#                 except Exception as e:
+#                     st.error(f"Error processing query: {str(e)}")
+#         else:
+#             st.warning("Please enter a question.")
+
+# # Footer
+# st.markdown("---")
+# col1, col2, col3 = st.columns(3)
+# with col1:
+#     st.markdown("Made with ❤️ by Your Company")
+# with col2:
+#     st.markdown("Version 1.0.0")
+# with col3:
+#     st.markdown("[Documentation](https://your-docs-link.com)")
+
+#-----------------------------------
+
+Chaain.py
+
+class QueryValidator:
+    # """Handles query validation, including offensive word checks."""
+    
+    # def __init__(self, offensive_words: List[str] = None):
+    #     self.offensive_words = offensive_words or [
+    #         "offensive_word1", "explicit_word2", "swear_word3"  # Add actual offensive words
+    #     ]
+    
+    # def validate_query(self, query: str) -> Dict[str, str]:
+    #     """
+    #     Validates a user query for validity and checks for offensive content.
+    #     :param query: The query to validate.
+    #     :return: A dictionary with validation results.
+    #     """
+    #     if not query.strip():
+    #         return {"valid": False, "reason": "Empty query"}
+    #     if len(query) > 500:
+    #         return {"valid": False, "reason": "Query too long"}
+    #     if re.search(r"[<>$;]", query):
+    #         return {"valid": False, "reason": "Invalid characters detected"}
+    #     if any(word in query.lower() for word in self.offensive_words):
+    #         return {"valid": False, "reason": "Offensive or inappropriate content detected"}
+        
+    #     return {"valid": True, "reason": ""}
+
+
+
+
+
+
+  # # Step 2: Initialize the Chroma vector store
+        # self.vector_store = Chroma(
+        #     persist_directory=self.persist_dir,
+        #     embedding_function=embeddings
+        # )
+
+        # # Step 3: Load and chunk documents
+        # documents = load_existing_files(self.source_dir)
+        # if not documents:
+        #     logger.warning("No documents found in the source directory.")
+        #     return self.vector_store
+
+        # logger.info(f"Loaded {len(documents)} documents from {self.source_dir}.")
+        # chunks = chunk_documents(documents)
+        # if not chunks:
+        #     logger.warning("No valid chunks found. Vector store not updated.")
+        #     return self.vector_store
+
+        # logger.info(f"Generated {len(chunks)} document chunks for embedding.")
+
+        # # Step 4: Add chunks to the vector store
+        # self.vector_store.add_documents(chunks)
+        # logger.info(f"Vector store updated with {len(chunks)} chunks.")
+
+        # return self.vector_store
+
+from langchain_chroma import Chroma
+from app.core import load_existing_files, chunk_documents
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain import PromptTemplate
+from langchain_core.runnables import RunnableMap, RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain_google_genai import ChatGoogleGenerativeAI
+from config import api_key
+#
+from langchain.schema import Document
+from chromadb.utils import collection_exists
+from pathlib import Path
+import logging
+from typing import List, Dict, Any
+import re
+import os
+import json
+
+#AFter adding perspective
+import requests
+import re
+from config import Perspective_api
+
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+
+class QueryValidator:
+   
+    def validate_query(query: str, perspective_api: str) -> Dict[str, Any]:
+        """
+        Enhanced query validation with detailed feedback and Perspective API toxicity detection.
+    
+        :param query: The user query to validate.
+        :param api_key: Google Perspective API key.
+        :return: A dictionary with validation results.
+        """
+        # Check for basic validation rules
+        if not query.strip():
+            return {"valid": False, "reason": "Empty query", "is_generic": False}
+        if len(query) > 500:
+            return {"valid": False, "reason": "Query too long", "is_generic": False}
+        if re.search(r"[<>$;]", query):
+            return {"valid": False, "reason": "Invalid characters detected", "is_generic": False}
+    
+        # Detect generic queries
+        generic_patterns = [
+            r"^(hi|hello|hey)[\s!]*$",
+            r"^how are you",
+            r"^what('s| is) up",
+        ]
+        is_generic = any(re.match(pattern, query.lower()) for pattern in generic_patterns)
+    
+        # Use Perspective API to check for toxicity
+        perspective_url = "https://commentanalyzer.googleapis.com/v1alpha1/comments:analyze"
+        headers = {"Content-Type": "application/json"}
+        data = {
+            "comment": {"text": query},
+            "languages": ["en"],
+            "requestedAttributes": {"TOXICITY": {}, "PROFANITY": {}},
+            "doNotStore": True,
+        }
+    
+        try:
+            response = requests.post(perspective_url, headers=headers, json=data, params={"key": api_key})
+            response_data = response.json()
+    
+            # Extract toxicity and profanity scores
+            toxicity_score = response_data.get("attributeScores", {}).get("TOXICITY", {}).get("summaryScore", {}).get("value", 0)
+            profanity_score = response_data.get("attributeScores", {}).get("PROFANITY", {}).get("summaryScore", {}).get("value", 0)
+    
+            # If toxicity or profanity exceeds a threshold, mark the query as invalid
+            if toxicity_score >= 0.7 or profanity_score >= 0.7:
+                return {
+                    "valid": False,
+                    "reason": "Offensive or inappropriate content detected",
+                    "is_generic": is_generic,
+                    "toxicity_score": toxicity_score,
+                    "profanity_score": profanity_score,
+                }
+    
+        except Exception as e:
+            # Log error and proceed without toxicity detection
+            print(f"Perspective API error: {str(e)}")
+    
+        # Return valid status if all checks pass
+        return {
+            "valid": True,
+            "reason": "",
+            "is_generic": is_generic,
+        }
+    
+
+
+class QueryRefiner:
+    """Handles query refinement using an LLM."""
+    
+    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+        self.llm = ChatGoogleGenerativeAI(
+            google_api_key=api_key,
+            model=model,
+            temperature=0.1,  # Lower temperature for consistency
+            max_tokens=100,
+        )
+        
+    def refine_query(self, query: str, doc_context: str = "") -> str:
+        """
+        Refines query with optional document context awareness.
+        :param query: Original query.
+        :param doc_context: Document context to aid refinement (optional).
+        :return: Refined query.
+        """
+        prompt = f"""
+        Refine this query to make it more specific and searchable. 
+        If provided, consider the document context for relevant terminology.
+        
+        Original Query: "{query}"
+        Document Context: {doc_context[:200]}  # Optional sample of document content
+        
+        Return only the refined query.
+        """
+        try:
+            return self.llm.predict(prompt).strip()
+        except Exception as e:
+            logger.warning(f"Query refinement failed: {str(e)}")
+            return query
+
+
+class DocumentReranker:
+    """Re-ranks retrieved documents based on relevance using an LLM."""
+    
+    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+        self.llm = ChatGoogleGenerativeAI(
+            google_api_key=api_key,
+            model=model,
+            temperature=0.0,  # Zero temperature for deterministic ranking
+        )
+        
+    def rerank_documents(self, query: str, documents: List[Document]) -> List[Document]:
+        """
+        Re-ranks documents with metadata enhancement.
+        :param query: The user query.
+        :param documents: List of documents to rank.
+        :return: Re-ranked list of documents.
+        """
+        if not documents:
+            return []
+            
+        try:
+            prompt = f"""
+            Rate these documents' relevance to the query (1-10):
+            Query: {query}
+            
+            Documents:
+            {self._format_documents(documents)}
+            
+            Return JSON: {{"scores": [n1, n2, ...], "reasoning": ["r1", "r2", ...]}}.
+            """
+            
+            response = self.llm.predict(prompt)
+            result = json.loads(response)
+            
+            # Enhance document metadata
+            for doc, score, reason in zip(documents, result["scores"], result["reasoning"]):
+                doc.metadata.update({
+                    "relevance_score": score,
+                    "ranking_reason": reason,
+                    "query": query
+                })
+            
+            return sorted(documents, key=lambda d: d.metadata["relevance_score"], reverse=True)
+            
+        except Exception as e:
+            logger.error(f"Reranking failed: {str(e)}")
+            return documents
+
+    @staticmethod
+    def _format_documents(documents: List[Document]) -> str:
+        return "\n\n".join(
+            f"Doc {i + 1}:\n{doc.page_content[:300]}..."
+            for i, doc in enumerate(documents)
+        )
+
+
+    
+class VectorStoreManager:
+    """Manages vector store creation and updates."""
+
+    def __init__(self, source_dir: str, persist_dir: str, api_key: str):
+        self.source_dir = source_dir
+        self.persist_dir = persist_dir
+        self.api_key = api_key
+        self.vector_store = None
+
+    def create_vector_store(self) -> Chroma:
+        """
+        Creates and populates a Chroma vector store with document chunks.
+        :return: A Chroma vector store.
+        """
+        if not self.api_key:
+            raise ValueError("Google API key is required to initialize embeddings.")
+
+        # Step 1: Initialize the embedding model
+        embeddings = GoogleGenerativeAIEmbeddings(
+            google_api_key=self.api_key,
+            model="models/embedding-001"
+        )
+
+        # Check if the vector store already exists
+        if Path(self.persist_dir).exists() and len(list(Path(self.persist_dir).iterdir())) > 0:
+            # Load the existing vector store
+            self.vector_store = Chroma(
+                persist_directory=self.persist_dir,
+                embedding_function=embeddings,
+            )
+            logger.info("Loaded existing vector store from persistence directory.")
+        else:
+            # Initialize a new vector store if none exists
+            self.vector_store = Chroma(
+                persist_directory=self.persist_dir,
+                embedding_function=embeddings,
+            )
+            logger.info("Initialized a new vector store.")
+
+        # Process and add new files to the vector store only if needed
+        self.update_vector_store()
+        return self.vector_store
+
+    def update_vector_store(self):
+        """
+        Loads and adds new files from the source directory into the vector store.
+        """
+        documents = load_existing_files(self.source_dir)
+        if not documents:
+            logger.info("No new documents found in the source directory.")
+            return
+
+        logger.info(f"Loaded {len(documents)} documents from the source directory.")
+        chunks = chunk_documents(documents)
+        if chunks:
+            self.vector_store.add_documents(chunks)
+            logger.info(f"Added {len(chunks)} document chunks to the vector store.")
+        else:
+            logger.warning("No valid chunks found in the documents.")
+
+
+class RAGChainProcessor:
+    """Handles the RAG (Retrieve and Generate) pipeline."""
+
+    def __init__(self, vector_store: Chroma, api_key: str, llm_model: str = "gemini-1.5-flash"):
+        self.vector_store = vector_store
+        self.api_key = api_key
+        self.llm_model = llm_model
+
+        # Initialize LLM for generating answers
+        self.llm = ChatGoogleGenerativeAI(
+            google_api_key=self.api_key,
+            model=self.llm_model,
+            temperature=0.5,
+            max_tokens=1000,
+            max_retries=2,
+        )
+
+        # Initialize a structured prompt
+        self.prompt = PromptTemplate(template="""
+        Answer the question based on the provided context. 
+        If the context doesn't contain enough information, say so.
+
+        Context: {context}
+        Question: {question}
+        Answer:
+        """)
+
+    def process_query(self, query: str) -> str:
+        """
+        Processes a query through the RAG pipeline.
+        :param query: The user query to process.
+        :return: The generated response.
+        """
+        # Retrieve relevant documents
+        retriever = self.vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 5})
+        retrieved_docs = retriever.get_relevant_documents(query)
+
+        if not retrieved_docs:
+            logger.warning("No relevant documents found for the query.")
+            return "I couldn't find any relevant information in the provided documents."
+
+        # Format the context from retrieved documents
+        context = "\n\n".join(f"Document {i + 1}:\n{doc.page_content}" for i, doc in enumerate(retrieved_docs))
+
+        # Generate the response
+        response = self.llm.predict(self.prompt.format(context=context, question=query))
+        return response
+    
+
+class QueryProcessor:
+    """Combines query validation, refinement, re-ranking, and the RAG chain."""
+
+    def __init__(self, vector_store_manager: VectorStoreManager, rag_chain: RAGChainProcessor, query_refiner: QueryRefiner, reranker: DocumentReranker):
+        self.validator = QueryValidator()
+        self.vector_store_manager = vector_store_manager
+        self.rag_chain = rag_chain
+        self.query_refiner = query_refiner
+        self.reranker = reranker
+
+    def process_query(self, query: str) -> str:
+        """
+        Validates, refines, and processes the query through the RAG pipeline.
+        :param query: The query to process.
+        :return: The response or a validation error message.
+        """
+        # Validate the query
+        validation_result = self.validator.validate_query(query)
+        if not validation_result["valid"]:
+            return f"Query validation failed: {validation_result['reason']}"
+
+        # Refine the query using document context
+        sample_docs = self.vector_store_manager.vector_store.similarity_search(query, k=2)
+        document_context = " ".join(doc.page_content[:100] for doc in sample_docs)
+        refined_query = self.query_refiner.refine_query(query, document_context)
+
+        # Retrieve and re-rank documents
+        retrieved_docs = self.vector_store_manager.vector_store.as_retriever().get_relevant_documents(refined_query)
+        ranked_docs = self.reranker.rerank_documents(refined_query, retrieved_docs)
+
+        # Format top-ranked context
+        context = "\n\n".join(f"[{i + 1}] {doc.page_content}" for i, doc in enumerate(ranked_docs[:3]))
+
+        # Generate response
+        return self.rag_chain.llm.predict(self.rag_chain.prompt.format(context=context, question=refined_query))
+
+
+---------------
+
+#-----------------------------------------
+# class QueryProcessor:
+#     """Combines query validation, refinement, re-ranking, and the RAG pipeline."""
+
+#     def __init__(self, vector_store_manager: VectorStoreManager, rag_chain: RAGChainProcessor, query_refiner: QueryRefiner, reranker: DocumentReranker):
+#         self.validator = QueryValidator()
+#         self.vector_store_manager = vector_store_manager
+#         self.rag_chain = rag_chain
+#         self.query_refiner = query_refiner
+#         self.reranker = reranker
+
+#     def process_query(self, query: str) -> str:
+#         """
+#         Validate, refine, re-rank, and process a query through the RAG pipeline.
+#         """
+#         validation = self.validator.validate_query(query)
+#         if not validation["valid"]:
+#             return f"Query validation failed: {validation['reason']}"
+
+#         sample_docs = self.vector_store_manager.vector_store.similarity_search(query, k=2)
+#         doc_context = " ".join(doc.page_content[:100] for doc in sample_docs)
+#         refined_query = self.query_refiner.refine_query(query, doc_context)
+
+#         retrieved_docs = self.vector_store_manager.vector_store.as_retriever().get_relevant_documents(refined_query)
+#         ranked_docs = self.reranker.rerank_documents(refined_query, retrieved_docs)
+
+#         context = "\n\n".join(f"[{i + 1}] {doc.page_content}" for i, doc in enumerate(ranked_docs[:3]))
+#         return self.rag_chain.process_query(refined_query)
+
+# def validate_query(query: str) -> Dict[str, Any]:
+#     """
+#     Enhanced query validation with explicit/offensive word detection.
+#     """
+#     if not query.strip():
+#         return {"valid": False, "reason": "Empty query", "is_generic": False}
+#     if len(query) > 500:
+#         return {"valid": False, "reason": "Query too long", "is_generic": False}
+#     if re.search(r"[<>$;]", query):
+#         return {"valid": False, "reason": "Invalid characters detected", "is_generic": False}
+    
+#     # Detect if query contains offensive/explicit content
+#     offensive_words = [
+#         "offensive_word1", "explicit_word2", "swear_word3"  # Add more words to the list
+#     ]
+#     if any(offensive_word in query.lower() for offensive_word in offensive_words):
+#         return {"valid": False, "reason": "Offensive or inappropriate content detected", "is_generic": False}
+    
+#     # Detect if query is generic/conversational
+#     generic_patterns = [
+#         r"^(hi|hello|hey)[\s!]*$",
+#         r"^how are you",
+#         r"^what('s| is) up",
+#     ]
+#     is_generic = any(re.match(pattern, query.lower()) for pattern in generic_patterns)
+    
+#     return {"valid": True, "reason": "", "is_generic": is_generic}
+
+
+# class QueryRefiner:
+#     def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+#         self.llm = ChatGoogleGenerativeAI(
+#             google_api_key=api_key,
+#             model=model,
+#             temperature=0.1,  # Lower temperature for consistency
+#             max_tokens=100,
+#         )
+        
+#     def refine_query(self, query: str, doc_context: str = "") -> str:
+#         """Refines query with optional document context awareness."""
+#         prompt = f"""
+#         Refine this query to make it more specific and searchable. 
+#         If provided, consider the document context for relevant terminology.
+        
+#         Original Query: "{query}"
+#         Document Context: {doc_context[:200]}  # Optional sample of document content
+        
+#         Return only the refined query.
+#         """
+#         try:
+#             return self.llm.predict(prompt).strip()
+#         except Exception as e:
+#             logger.warning(f"Query refinement failed: {str(e)}")
+#             return query
+
+# class DocumentReranker:
+#     def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+#         self.llm = ChatGoogleGenerativeAI(
+#             google_api_key=api_key,
+#             model=model,
+#             temperature=0.0,
+#         )
+        
+#     def rerank_documents(self, query: str, documents: List[Document]) -> List[Document]:
+#         """Re-ranks documents with metadata enhancement."""
+#         if not documents:
+#             return []
+            
+#         try:
+#             # Enhanced scoring prompt
+#             prompt = f"""
+#             Rate these documents' relevance to the query (1-10):
+#             Query: {query}
+            
+#             Documents:
+#             {self._format_documents(documents)}
+            
+#             Return JSON: {{"scores": [n1, n2, ...], "reasoning": ["r1", "r2", ...]}}.
+#             """
+            
+#             response = self.llm.predict(prompt)
+#             result = json.loads(response)
+            
+#             # Enhance document metadata
+#             for doc, score, reason in zip(documents, result["scores"], result["reasoning"]):
+#                 doc.metadata.update({
+#                     "relevance_score": score,
+#                     "ranking_reason": reason,
+#                     "query": query
+#                 })
+            
+#             return sorted(documents, key=lambda d: d.metadata["relevance_score"], reverse=True)
+            
+#         except Exception as e:
+#             logger.error(f"Reranking failed: {str(e)}")
+#             return documents
+
+#     @staticmethod
+#     def _format_documents(documents: List[Document]) -> str:
+#         return "\n\n".join(
+#             f"Doc {i + 1}:\n{doc.page_content[:300]}..."
+#             for i, doc in enumerate(documents)
+#         )
+
+# def load_and_chunk_documents(source_dir: str, chunk_size: int = 1000, overlap: int = 200) -> List[Document]:
+#     """
+#     Loads files from the specified directory and chunks them into smaller sections.
+#     """
+#     files = load_existing_files(source_dir)  # Custom function to load files
+#     all_chunks = []
+#     for file in files:
+#         chunks = chunk_documents(file, chunk_size=chunk_size, overlap=overlap)  # Custom chunking logic
+#         all_chunks.extend(chunks)
+#     logger.info(f"Loaded and chunked {len(all_chunks)} sections from {len(files)} files.")
+#     return all_chunks
+
+# def create_vector_store(source_dir: str, persist_dir: str, api_key: str) -> Chroma:
+#     """
+#     Creates and populates a vector store with documents from the source directory.
+#     """
+#     embeddings = ChatGoogleGenerativeAI(
+#         google_api_key=api_key,
+#         model="models/embedding-001",
+#         temperature=0,
+#     )
+#     vector_store = Chroma(persist_directory=persist_dir, embedding_function=embeddings)
+
+#     # Load and chunk documents
+#     documents = load_and_chunk_documents(source_dir)
+#     if documents:
+#         vector_store.add_documents(documents)
+#         logger.info("Vector store updated with document chunks.")
+#     else:
+#         logger.warning("No documents found for vector store population.")
+    
+#     return vector_store
+
+# def create_rag_chain(vector_store: Chroma, api_key: str, llm_model: str = "gemini-1.5-flash"):
+#     """Enhanced RAG chain."""
+#     refiner = QueryRefiner(api_key, llm_model)
+#     reranker = DocumentReranker(api_key, llm_model)
+#     llm = ChatGoogleGenerativeAI(
+#         google_api_key=api_key,
+#         model=llm_model,
+#         temperature=0.5,
+#     )
+#     prompt = PromptTemplate(template="""Context: {context}\nRefined Question: {refined_question}\nAnswer concisely:\n""")
+    
+#     def process_query(input_data: Dict[str, Any]) -> str:
+#         try:
+#             question = input_data["question"]
+#             validation = validate_query(question)
+#             if not validation["valid"]:
+#                 return f"Invalid query: {validation['reason']}."
+#             refined_query = refiner.refine_query(question)
+#             docs = vector_store.similarity_search(refined_query, k=10)
+#             ranked_docs = reranker.rerank_documents(refined_query, docs)
+#             context = "\n".join(f"[{i + 1}] {doc.page_content}" for i, doc in enumerate(ranked_docs[:3]))
+#             return llm.predict(prompt.format(context=context, refined_question=refined_query))
+#         except Exception as e:
+#             logger.error(f"Error processing query: {e}")
+#             return "An error occurred."
+
+#     return process_query
+
+-----chain.py
+
+'''
+from langchain_chroma import Chroma
+from app.core import load_existing_files, chunk_documents
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
+from langchain import PromptTemplate
+from langchain_core.runnables import RunnableMap, RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from langchain_google_genai import ChatGoogleGenerativeAI
+from config import api_key
+
+def create_vector_store(source_dir="./Data/source", persist_dir="./Data/vector_store" ):
+    """
+    Creates or loads a Chroma vector store and populates it with documents from the source directory.
+    Requires an embedding function to compute embeddings.
+    """
+    if not api_key:
+        raise ValueError("Google API key is required to initialize embeddings.")
+
+    # Initialize Embedding Model
+    embeddings = GoogleGenerativeAIEmbeddings(google_api_key=api_key, model="models/embedding-001")
+
+    # Initialize Chroma Vector Store with Embedding Model
+    vector_store = Chroma(persist_directory=persist_dir, embedding_function=embeddings)
+
+    # Load existing files
+    documents = load_existing_files(source_dir)
+    print(f"Loaded {len(documents)} documents from {source_dir}")
+
+    # Generate chunks
+    chunks = chunk_documents(documents)
+    print(f"Generated {len(chunks)} chunks for the vector store")
+
+    # Add chunks only if they are non-empty
+    if not chunks:
+        print("No valid chunks found. Skipping vector store update.")
+        return vector_store
+
+    vector_store.add_documents(chunks)
+    print("Vector store updated successfully.")
+    return vector_store
+
+def create_rag_chain(vector_store, api_key, llm_model="gemini-1.5-flash"):
+    """
+    Creates a RAG chain for querying the vector store.
+    """
+    prompt_template = """
+    Answer the question based on the context below. Assuming that you are Governance Risk Compliance expert in cybersecurity.
+    Simplify the paper and answer the question based on the context below. 
+      If the context is not relevant, just reply "Hmmm! I don't know" and ask if you should retrieve from the model.
+
+    context: {context}
+
+    question: {question}
+    """
+    prompt = PromptTemplate(template=prompt_template)
+
+    retriever = vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 3})
+
+    def format_docs(docs):
+        return "\n\n".join(doc.page_content for doc in docs)
+
+    llm = ChatGoogleGenerativeAI(
+        google_api_key=api_key,
+        model=llm_model,
+        temperature=0.5,
+        max_tokens=1000,
+        max_retries=2,
+    )
+    parser = StrOutputParser()
+
+    rag_chain = RunnableMap(
+        {
+            "context": retriever | format_docs,
+            "question": RunnablePassthrough(),
+        }
+    ) | prompt | llm | parser
+
+    return rag_chain
+'''
+
+
+-------LOAD EXISTING FILE CORE.PY------
+
+
+def load_existing_files(source_dir=DATA_DIR):
+    """
+    Loads all existing files in the source directory and returns them as a list of Documents.
+    """
+    documents = []
+    for file_path in Path(source_dir).rglob("*"):  # Recursively load all files
+        if file_path.is_file():
+            try:
+                content = load_file(file_path)
+                documents.append(Document(page_content=content, metadata={"source": str(file_path)}))
+            except ValueError as e:
+                logger.warning(f"Skipping unsupported file: {file_path} ({e})")
+    logger.info(f"Loaded {len(documents)} documents from {source_dir}")
+    return documents
+
+    
+def load_file(file_path: str) -> str:
+    """
+    Loads content from a file based on its extension (.txt, .docx, .pdf).
+    """
+    ext = Path(file_path).suffix.lower()
+
+    if ext == ".txt":
+        with open(file_path, "r", encoding="utf-8") as file:
+            return file.read()
+    elif ext == ".docx":
+        try:
+            doc = DocxDocument(file_path)
+            return "\n".join(paragraph.text for paragraph in doc.paragraphs if paragraph.text.strip())
+        except Exception as e:
+            logger.error(f"Error parsing DOCX file {file_path}: {e}")
+            return ""
+    elif ext == ".pdf":
+        try:
+            return pymupdf4llm.to_markdown(str(file_path))
+        except Exception as e:
+            logger.error(f"Error parsing PDF with pymupdf4llm: {e}")
+            return ""
+    else:
+        raise ValueError(f"Unsupported file format: {ext}")
+
+
+def chunk_documents(documents, chunk_size=1000, chunk_overlap=200):
+    """
+    Splits documents into manageable chunks using RecursiveCharacterTextSplitter.
+    """
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+    try:
+        chunks = text_splitter.split_documents(documents)
+        logger.info(f"Generated {len(chunks)} document chunks")
+        return chunks
+    except Exception as e:
+        logger.error(f"Error during document chunking: {e}")
+        return []
+
+

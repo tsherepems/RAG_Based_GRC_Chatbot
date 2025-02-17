@@ -1,0 +1,14 @@
+
+ langchain
+ langchain_community 
+ langchain_chroma
+ python-docx
+ python-dotenv
+ pymupdf4llm
+ streamlit
+ numpy
+ pandas
+ huggingface_hub
+ transformers langchain
+ sentence-transformers
+ langchain_google_genai
