@@ -1,40 +1,9 @@
+"""
+app/__init__.py
+Simple init file for the 'app' package.
+"""
 
-# Import chain components
-from .chain import (
-    QueryProcessor,
-    VectorStoreManager,
-    RAGChainProcessor,
-    QueryRefiner,
-    DocumentReranker,
-)
-
-# Import core components
-from .core import (
-    save_uploaded_file,
-    load_existing_files,
-    chunk_documents,
-    load_file,
-)
-
-# Import interface functions
-from .interface import (
-    upload_files,
-    manage_files,
-    query_section,
-)
-
-# Expose all necessary components
-__all__ = [
-    "QueryProcessor",
-    "VectorStoreManager",
-    "RAGChainProcessor",
-    "QueryRefiner",
-    "DocumentReranker",
-    "save_uploaded_file",
-    "load_existing_files",
-    "chunk_documents",
-    "load_file",
-    "upload_files",
-    "manage_files",
-    "query_section",
-]
+# You can re-export classes and functions here if you like, or leave it minimal.
+from .core import save_uploaded_file, load_file, load_existing_files, chunk_documents
+from .chain import VectorStoreManager, RAGChain, QueryProcessor
+from .interface import upload_files, manage_files, query_section
