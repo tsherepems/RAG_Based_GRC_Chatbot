@@ -28,7 +28,8 @@ else:
 
 # 2. Initialize RAGChain and QueryProcessor
 if "rag_chain" not in st.session_state:
-    st.session_state["rag_chain"] = RAGChain(vector_store=vector_store)
+    st.session_state["rag_chain"] = RAGChain(vector_store)
+    st.session_state["query_processor"] = QueryProcessor(rag_chain=st.session_state["rag_chain"])
 
 if "query_processor" not in st.session_state:
     st.session_state["query_processor"] = QueryProcessor(rag_chain=st.session_state["rag_chain"])

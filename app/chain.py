@@ -1,10 +1,11 @@
+
 """
 app/chain.py
 Manages the vector store creation and the simple RAG pipeline.
 """
-
 import logging
 import os
+import re
 from pathlib import Path
 from typing import List
 
@@ -12,17 +13,12 @@ from langchain_chroma import Chroma
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 
-
-from app.core import  load_existing_files, chunk_documents, load_file,save_processed_cache, load_processed_cache,get_file_hash
+from app import  load_existing_files, chunk_documents, load_file,save_processed_cache, load_processed_cache,get_file_hash
 from config import api_key
-
-
 from langchain.schema import Document
-import re
-import logging
 from googleapiclient import discovery
 from google.auth.credentials import AnonymousCredentials
-from config import Perspective_api  # Ensure your API key is set here
+from config import Perspective_api  
 
 # Configure logging (using INFO level)
 logging.basicConfig(level=logging.INFO)
@@ -160,16 +156,6 @@ class VectorStoreManager:
                 logging.info(f"Added {len(chunks)} new document chunks to the vector store.")
 
 
-    # def update_vector_store(self):
-    #     """
-    #     Loads existing files, chunks them, and adds them to the vector store.
-    #     """
-    #     documents = load_existing_files(self.source_dir)
-    #     if documents:
-    #         chunks = chunk_documents(documents)
-    #         if chunks:
-    #             self.vector_store.add_documents(chunks)
-    #             logger.info(f"Added {len(chunks)} document chunks to the vector store.")
 
 
 class RAGChain:
@@ -186,7 +172,7 @@ class RAGChain:
             max_tokens=1000
         )
         self.prompt_template = PromptTemplate(template="""
-            You are a GRC (Governance, Risk, Compliance) assistant. 
+            You are a GRC (Governance, Risk, Compliance) expert tutor with years of experience. 
             Answer the question below using only the provided context. 
             If you don't find relevant info, say you are not sure.
 
@@ -218,49 +204,99 @@ class RAGChain:
             answer = str(response)
     
         return answer.strip()
-
-
-    # def run(self, query: str) -> str:
-    #     """
-    #     Retrieves top-k documents from the vector store and uses an LLM to generate a response.
-    #     """
-    #     # Retrieve top 5 relevant chunks
-    #     retriever = self.vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 5})
-    #     docs = retriever.invoke(query)
-
-    #     if not docs:
-    #         return "I'm not sure. I don't have relevant information in my documents."
-
-    #     # Build a context string
-    #     context_str = "\n\n".join([doc.page_content for doc in docs])
-    #     prompt = self.prompt_template.format(context=context_str, question=query)
-    #     response = self.llm.invoke(prompt)
-    #     # Extract the text content; if it's an AIMessage object, use the 'content' attribute
-    #     return response.content.strip() if hasattr(response, "content") else str(response).strip()
-
+    
+class QueryRefiner:
+    def refine_query(self, query: str, doc_context: str = "") -> str:
+        prompt = f"""
+        Refine the following query to make it more specific and better suited for document retrieval.
+        Original Query: "{query}"
+        Document Context: {doc_context[:200]}
+        Return only the refined query.
+        """
+        try:
+            refined = self.llm.invoke(prompt)
+            if hasattr(refined, "content"):
+                return refined.content.strip()
+            return str(refined).strip()
+        except Exception as e:
+            logger.warning("Query refinement failed: %s", e)
+            return query
         
-class QueryProcessor:
-    """
-    A simple class that processes queries by delegating to the RAG chain.
-    """
+
+class QueryProcessor: #edited with generic query feature
+
     def __init__(self, rag_chain: RAGChain):
         self.rag_chain = rag_chain
-        # Initialize the validator here:
         self.validator = QueryValidator()
+        self.query_refiner = QueryRefiner()
+
+
+
+    def is_generic_query(self, query: str) -> bool:
+            
+        """
+        Uses an LLM prompt to classify the query as generic or document-specific.
+        """
+        prompt = f"""
+        Determine if the following query is generic (e.g., greetings, small talk, or simple conversation) 
+        or document-specific (requiring contextual document retrieval). 
+        Respond with only one word: "generic" or "document-specifi      
+        Query: "{query}"
+        """
+        try:
+            response = self.rag_chain.llm.invoke(prompt)
+            if hasattr(response, "content"):
+                classification = response.content.strip().lower()
+            else:
+                classification = str(response).strip().lower()
+            return classification == "generic"
+        except Exception as e:
+            logger.warning("Generic query classification failed: %s", e)
+            # Fallback to regex if LLM call fails.
+            generic_patterns = [
+                r"^(hi|hello|hey)[\s!]*$",
+                r"^how are you",
+                r"^what('s| is) up",
+                r"^tell me a joke",
+                r"^what is your name"
+            ]
+            return any(re.match(pattern, query.lower()) for pattern in generic_patterns)
 
     def process_query(self, query: str) -> str:
         """
-        Passes the user query to the RAG chain for retrieval and generation.
+        Processes the query in the following steps:
+        1. Profanity check via the Perspective API.
+        2. Generic query separation: if generic, directly call the LLM.
+        3. For document-related queries, refine the query using document context.
+        4. Retrieve and answer using the RAG chain.
         """
-        # Check if the query is empty first.
         if not query.strip():
             return "Please provide a valid query."
 
-        # Validate the query using the QueryValidator.
+        # Step 1: Validate the query
         validation = self.validator.validate_query(query)
         if not validation["valid"]:
             return f"Query blocked: {validation['reason']}"
 
-        # If valid, process the query through the RAG chain.
-        return self.rag_chain.run(query)
+        # Step 2: Generic query check
+        if self.is_generic_query(query):
+            try:
+                logger.info("Processing generic query directly via LLM.")
+                response = self.rag_chain.llm.invoke(query)
+                if hasattr(response, "content"):
+                    return response.content.strip()
+                return str(response).strip()
+            except Exception as e:
+                logger.error("Error processing generic query: %s", e)
+                return "Sorry, I couldn't process your request at this time."
 
+        # Step 3: Document-specific query refinement
+        # Retrieve a small sample of document context for refinement.
+        retriever = self.rag_chain.vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 2})
+        sample_docs = retriever.invoke(query)
+        doc_context = " ".join([doc.page_content[:100] for doc in sample_docs]) if sample_docs else ""
+        refined_query = self.query_refiner.refine_query(query, doc_context)
+        logger.info("Refined Query: %s", refined_query)
+
+        # Step 4: Use the refined query for document retrieval and answer generation.
+        return self.rag_chain.run(refined_query)

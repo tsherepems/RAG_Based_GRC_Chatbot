@@ -52,6 +52,7 @@ def manage_files(vector_store: Chroma) -> None:
     else:
         st.info("No files have been uploaded yet.")
 
+
 def query_section(query_processor) -> None:
     """
     Renders a simple query input box and displays the answer.
@@ -61,9 +62,17 @@ def query_section(query_processor) -> None:
 
     if st.button("Submit Query"):
         if user_query.strip():
-            with st.spinner("Processing..."):
+            # Determine the spinner message based on query type.
+            if query_processor.is_generic_query(user_query):
+                spinner_msg = "Processing generic query..."
+            else:
+                spinner_msg = "Processing query..."
+                
+            with st.spinner(spinner_msg):
                 response = query_processor.process_query(user_query)
                 st.write("**Answer:**")
                 st.write(response)
         else:
             st.warning("Please enter a valid query.")
+
+
