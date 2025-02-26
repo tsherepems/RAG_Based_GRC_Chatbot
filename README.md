@@ -1,5 +1,5 @@
 # RAG_Based_GRC_Chatbot
-A Retrieval-Augmented Generation (RAG) system that allows users to upload documents, manage files, and query the contents using an interactive Streamlit interface. This project integrates file handling, document chunking, vector storage, and query processing powered by Google’s Generative AI and LangChain libraries.
+A Retrieval-Augmented Generation (RAG) system that allows users to upload documents, manage files, and query the contents using an interactive Streamlit interface. This project integrates file handling, document chunking, vector storage, and query processing powered by Google’s Generative AI and LangChain libraries. Similarly, it employs functions of profanity checking, differentiating generic query from document related and query refinement.
 
 ## Overview
 
