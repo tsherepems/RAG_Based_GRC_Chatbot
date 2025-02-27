@@ -6,6 +6,7 @@ The main entry point for running the Streamlit app.
 import streamlit as st
 from app import upload_files, manage_files, query_section
 from app.chain import VectorStoreManager, RAGChain, QueryProcessor
+from config import api_key
 
 # Streamlit Page Config
 st.set_page_config(
@@ -29,10 +30,14 @@ else:
 # 2. Initialize RAGChain and QueryProcessor
 if "rag_chain" not in st.session_state:
     st.session_state["rag_chain"] = RAGChain(vector_store)
-    st.session_state["query_processor"] = QueryProcessor(rag_chain=st.session_state["rag_chain"])
+    #st.session_state["query_processor"] = QueryProcessor(rag_chain=st.session_state["rag_chain"])
+if "reranker" not in st.session_state:
+    from app.chain import DocumentReranker  # Ensure correct import based on your structure.
+      # Ensure you have the api_key in your Streamlit secrets
+    st.session_state["reranker"] = DocumentReranker(api_key)
 
 if "query_processor" not in st.session_state:
-    st.session_state["query_processor"] = QueryProcessor(rag_chain=st.session_state["rag_chain"])
+    st.session_state["query_processor"] = QueryProcessor(rag_chain=st.session_state["rag_chain"],      reranker=st.session_state["reranker"])
 
 # Sidebar
 st.sidebar.title("GRC RAG Assistant")
@@ -52,4 +57,4 @@ with tab3:
 
 # Footer
 st.markdown("---")
-st.markdown("**Powered by a simplified RAG pipeline**")
+st.markdown("**Powered by a simplified RAG pipeline by Pemba Tshering**")

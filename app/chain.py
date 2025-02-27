@@ -8,12 +8,13 @@ import os
 import re
 from pathlib import Path
 from typing import List
+import json
 
 from langchain_chroma import Chroma
 from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
 from langchain_core.prompts import PromptTemplate
 
-from app import  load_existing_files, chunk_documents, load_file,save_processed_cache, load_processed_cache,get_file_hash
+from app.core import  load_existing_files, chunk_documents, load_file,save_processed_cache, load_processed_cache,get_file_hash
 from config import api_key
 from langchain.schema import Document
 from googleapiclient import discovery
@@ -79,7 +80,6 @@ class QueryValidator:
         return {"valid": True, "reason": "", "is_generic": False}
 
 
-
 class VectorStoreManager:
     """
     Handles creating or loading the Chroma vector store and updating it with new documents.
@@ -118,6 +118,7 @@ class VectorStoreManager:
         return self.vector_store
     
     def update_vector_store(self):
+        #from app.core import save_processed_cache, load_processed_cache, get_file_hash
         """ Loads files from the source directory, checks if they are new or changed by comparing hashes,
         and adds only new document chunks to the vector store. """
         
@@ -154,8 +155,6 @@ class VectorStoreManager:
             if chunks:
                 self.vector_store.add_documents(chunks)
                 logging.info(f"Added {len(chunks)} new document chunks to the vector store.")
-
-
 
 
 class RAGChain:
@@ -206,9 +205,18 @@ class RAGChain:
         return answer.strip()
     
 class QueryRefiner:
+    def __init__(self):
+        self.llm = ChatGoogleGenerativeAI(
+            google_api_key=api_key,
+            model="gemini-1.5-flash",
+            temperature=0.1,
+            max_tokens=100
+        )
+
     def refine_query(self, query: str, doc_context: str = "") -> str:
         prompt = f"""
         Refine the following query to make it more specific and better suited for document retrieval.
+        if the user asks about clause 5 for eg, dont refine it to 5.1, 5.2 etc.
         Original Query: "{query}"
         Document Context: {doc_context[:200]}
         Return only the refined query.
@@ -222,13 +230,51 @@ class QueryRefiner:
             logger.warning("Query refinement failed: %s", e)
             return query
         
+class DocumentReranker:
+    """
+    Re-ranks retrieved documents based on relevance to the query using an LLM.
+    """
+    def __init__(self, api_key: str, model: str = "gemini-1.5-flash"):
+        self.llm = ChatGoogleGenerativeAI(
+            google_api_key=api_key,
+            model=model,
+            temperature=0.0
+        )
+
+    def rerank_documents(self, query: str, documents: List[Document]) -> List[Document]:
+        if not documents:
+            return []
+
+        # Construct a prompt that asks the LLM to score each document's relevance
+        prompt = f"""
+        Rate these documents' relevance to the following query on a scale from 1 (least relevant) to 10 (most relevant).
+        Query: {query}
+
+        Documents:
+        {self._format_documents(documents)}
+
+        Return the scores as a comma-separated list, e.g., 7, 5, 9.
+
+        """
+        response = self.llm.invoke(prompt)
+        response_text = response.content if hasattr(response, "content") else str(response)
+        scores = [int(score.strip()) for score in response_text.split(",")]
+        for doc, score in zip(documents, scores):
+            doc.metadata["relevance_score"] = score
+        return sorted(documents, key=lambda d: d.metadata["relevance_score"], reverse=True)
+    
+    def _format_documents(self, documents: list) -> str:
+        return "\n\n".join(
+            f"{i+1}. {doc.page_content[:100]}..." for i, doc in enumerate(documents)
+        )
 
 class QueryProcessor: #edited with generic query feature
 
-    def __init__(self, rag_chain: RAGChain):
+    def __init__(self, rag_chain: RAGChain, reranker: DocumentReranker):
         self.rag_chain = rag_chain
         self.validator = QueryValidator()
         self.query_refiner = QueryRefiner()
+        self.reranker = reranker
 
 
 
@@ -240,7 +286,7 @@ class QueryProcessor: #edited with generic query feature
         prompt = f"""
         Determine if the following query is generic (e.g., greetings, small talk, or simple conversation) 
         or document-specific (requiring contextual document retrieval). 
-        Respond with only one word: "generic" or "document-specifi      
+        Respond with only one word: "generic" or "document-specific".     
         Query: "{query}"
         """
         try:
@@ -298,5 +344,16 @@ class QueryProcessor: #edited with generic query feature
         refined_query = self.query_refiner.refine_query(query, doc_context)
         logger.info("Refined Query: %s", refined_query)
 
-        # Step 4: Use the refined query for document retrieval and answer generation.
+        # Step 4: Retrieve documents using the refined query
+        retrieved_docs = retriever.invoke(refined_query)
+        
+        # Step 5: Re-rank the documents 
+        ranked_docs = self.reranker.rerank_documents(refined_query, retrieved_docs)
+        
+        # step 5: Use top ranked docs to form the context
+        top_docs = ranked_docs[:3]
+        context = "\n\n".join([doc.page_content for doc in top_docs])
+        refined_query = self.query_refiner.refine_query(query, context[:200])
+
+        # Step 5: Use the refined query for document retrieval and answer generation.
         return self.rag_chain.run(refined_query)
