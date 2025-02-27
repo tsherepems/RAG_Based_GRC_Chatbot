@@ -216,7 +216,7 @@ class QueryRefiner:
     def refine_query(self, query: str, doc_context: str = "") -> str:
         prompt = f"""
         Refine the following query to make it more specific and better suited for document retrieval.
-        if the user asks about clause 5 for eg, dont refine it to 5.1, 5.2 etc.
+        if the user asks about clause 5 for eg, dont refine it to 5.1, 5.2 etc. and also complete the incomplete words by predicting it.
         Original Query: "{query}"
         Document Context: {doc_context[:200]}
         Return only the refined query.
@@ -238,35 +238,43 @@ class DocumentReranker:
         self.llm = ChatGoogleGenerativeAI(
             google_api_key=api_key,
             model=model,
-            temperature=0.0
+            temperature=0.1
         )
 
     def rerank_documents(self, query: str, documents: List[Document]) -> List[Document]:
-        if not documents:
-            return []
-
-        # Construct a prompt that asks the LLM to score each document's relevance
+         # Create a prompt that instructs the LLM to output a comma-separated list of scores.
         prompt = f"""
-        Rate these documents' relevance to the following query on a scale from 1 (least relevant) to 10 (most relevant).
+        For each document below, assign a relevance score from 1 (least relevant) to 10 (most relevant) with respect to the query.
         Query: {query}
 
         Documents:
         {self._format_documents(documents)}
 
         Return the scores as a comma-separated list, e.g., 7, 5, 9.
-
         """
+        logger.info("Re-ranker prompt: %s", prompt)
+
+        # Call the LLM to get the scores.
         response = self.llm.invoke(prompt)
         response_text = response.content if hasattr(response, "content") else str(response)
+        
+        # Parse the comma-separated output into a list of integers.
         scores = [int(score.strip()) for score in response_text.split(",")]
+
+        # Attach scores to the document metadata.
         for doc, score in zip(documents, scores):
             doc.metadata["relevance_score"] = score
-        return sorted(documents, key=lambda d: d.metadata["relevance_score"], reverse=True)
-    
+
+        # Return the documents sorted by their relevance score in descending order.
+        ranked_docs = sorted(documents, key=lambda d: d.metadata["relevance_score"], reverse=True)
+        return ranked_docs
+
     def _format_documents(self, documents: list) -> str:
+        # Formats the documents for the prompt. 
         return "\n\n".join(
             f"{i+1}. {doc.page_content[:100]}..." for i, doc in enumerate(documents)
         )
+    
 
 class QueryProcessor: #edited with generic query feature
 
@@ -338,22 +346,34 @@ class QueryProcessor: #edited with generic query feature
 
         # Step 3: Document-specific query refinement
         # Retrieve a small sample of document context for refinement.
-        retriever = self.rag_chain.vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 2})
+        retriever = self.rag_chain.vector_store.as_retriever(search_type="similarity", search_kwargs={"k": 5})
         sample_docs = retriever.invoke(query)
         doc_context = " ".join([doc.page_content[:100] for doc in sample_docs]) if sample_docs else ""
         refined_query = self.query_refiner.refine_query(query, doc_context)
-        logger.info("Refined Query: %s", refined_query)
+        #logger.info("Refined Query: %s", refined_query)
 
         # Step 4: Retrieve documents using the refined query
         retrieved_docs = retriever.invoke(refined_query)
+       
         
-        # Step 5: Re-rank the documents 
-        ranked_docs = self.reranker.rerank_documents(refined_query, retrieved_docs)
+        # Step 5: Re-rank the documents
+        try:
+            ranked_docs = self.reranker.rerank_documents(refined_query, retrieved_docs) 
+            if not ranked_docs:  # if reranker returns an empty list
+                ranked_docs = retrieved_docs
+        except Exception as e:
+            logger.error("Re-ranking failed: %s", e)
+            ranked_docs = retrieved_docs  # Fallback
+        
         
         # step 5: Use top ranked docs to form the context
+        top_scores = [doc.metadata.get("relevance_score") for doc in ranked_docs[:3]]
+        logger.info("Documents re-ranked. Top scores: %s", top_scores)
+        # Further refine query using top-ranked docs:
         top_docs = ranked_docs[:3]
         context = "\n\n".join([doc.page_content for doc in top_docs])
         refined_query = self.query_refiner.refine_query(query, context[:200])
+
 
         # Step 5: Use the refined query for document retrieval and answer generation.
         return self.rag_chain.run(refined_query)
